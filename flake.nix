@@ -9,7 +9,10 @@
     { self, nixpkgs, ... }:
     let
       lib = nixpkgs.lib;
-      systems = [ "x86_64-linux" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-darwin"
+      ];
       forAllSystems = lib.genAttrs systems;
     in
     {
@@ -19,23 +22,25 @@
           pkgs = import nixpkgs { inherit system; };
           inherit (pkgs) stdenv;
 
-
           packageJson = builtins.fromJSON (builtins.readFile ./package.json);
           version = packageJson.version;
 
           sharedLibraryExt = stdenv.hostPlatform.extensions.sharedLibrary;
           supportedCompiledTargets = {
             x86_64-linux = "bun-linux-x64";
+            aarch64-darwin = "bun-darwin-arm64";
           };
           compiledTarget = supportedCompiledTargets.${system} or null;
           targetSlug = target: lib.removePrefix "bun-" target;
 
           bunDepsHashBySystem = {
             x86_64-linux = "sha256-eA/mi+kblkx2tEp5yar039wQ8zvC2GJrM6cserkC2Aw=";
+            aarch64-darwin = "sha256-4Jaw8P8/AXIqdkNGM4FyaeGS+eqYBLzrpux0arZtq6E=";
           };
 
           cargoVendorHashBySystem = {
             x86_64-linux = "sha256-tOjtzkTeS4fbMlj9C1cDsnzcEjQrP4Aee8zTBaq520s=";
+            aarch64-darwin = "sha256-tOjtzkTeS4fbMlj9C1cDsnzcEjQrP4Aee8zTBaq520s=";
           };
 
           cleanSource = lib.cleanSourceWith {
@@ -156,15 +161,7 @@
 
           commonBuildInputs = [
             pkgs.openssl
-          ]
-          ++ lib.optionals stdenv.isDarwin (
-            with pkgs.darwin.apple_sdk.frameworks;
-            [
-              CoreFoundation
-              Security
-              SystemConfiguration
-            ]
-          );
+          ];
 
           runtimeLibraryPath = lib.makeLibraryPath (
             [
@@ -387,14 +384,6 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
-          darwinFrameworks = lib.optionals pkgs.stdenv.isDarwin (
-            with pkgs.darwin.apple_sdk.frameworks;
-            [
-              CoreFoundation
-              Security
-              SystemConfiguration
-            ]
-          );
         in
         {
           default = pkgs.mkShell {
@@ -417,8 +406,7 @@
               pkgs.tmux
               pkgs.wget
               pkgs.zip
-            ]
-            ++ darwinFrameworks;
+            ];
 
             RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
 
