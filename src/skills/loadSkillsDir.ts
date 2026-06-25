@@ -31,6 +31,7 @@ import {
 } from '../utils/effort.js'
 import {
   getClaudeConfigHomeDir,
+  getCrossVendorAgentsHomeDir,
   isBareMode,
   isEnvTruthy,
 } from '../utils/envUtils.js'
@@ -627,6 +628,16 @@ async function loadSkillsFromCommandsDir(
   }
 }
 
+// User-global skill roots. `getClaudeConfigHomeDir()` follows
+// NCODE_CONFIG_DIR/CLAUDE_CONFIG_DIR (vendor-scoped); the cross-vendor
+// `.agents/` surface follows $HOME only (Codex-aligned).
+function getUserGlobalSkillDirs(): string[] {
+  return [
+    join(getClaudeConfigHomeDir(), 'skills'),
+    join(getCrossVendorAgentsHomeDir(), '.agents', 'skills'),
+  ]
+}
+
 /**
  * Loads all skills from both /skills/ and legacy /commands/ directories.
  *
@@ -642,7 +653,7 @@ async function loadSkillsFromCommandsDir(
  */
 export const getSkillDirCommands = memoize(
   async (cwd: string): Promise<Command[]> => {
-    const userSkillsDir = join(getClaudeConfigHomeDir(), 'skills')
+    const userGlobalSkillDirs = getUserGlobalSkillDirs()
     const managedSkillsDirs = getExistingProjectOrManagedDirs(
       getManagedFilePath(),
       'skills',
@@ -650,7 +661,7 @@ export const getSkillDirCommands = memoize(
     const projectSkillsDirs = getProjectDirsUpToHome('skills', cwd)
 
     logForDebugging(
-      `Loading skills from: managed=[${managedSkillsDirs.join(', ')}], user=${userSkillsDir}, project=[${projectSkillsDirs.join(', ')}]`,
+      `Loading skills from: managed=[${managedSkillsDirs.join(', ')}], user=[${userGlobalSkillDirs.join(', ')}], project=[${projectSkillsDirs.join(', ')}]`,
     )
 
     // Load from additional directories (--add-dir)
@@ -698,7 +709,11 @@ export const getSkillDirCommands = memoize(
             ),
           ).then(results => results.flat()),
       isSettingSourceEnabled('userSettings') && !skillsLocked
-        ? loadSkillsFromSkillsDir(userSkillsDir, 'userSettings')
+        ? Promise.all(
+            userGlobalSkillDirs.map(dir =>
+              loadSkillsFromSkillsDir(dir, 'userSettings'),
+            ),
+          ).then(results => results.flat())
         : Promise.resolve([]),
       projectSettingsEnabled
         ? Promise.all(
@@ -905,6 +920,26 @@ export async function discoverSkillDirsForPaths(
           } catch {
             // Directory doesn't exist — already recorded above, continue
           }
+        }
+      }
+
+      // Codex-aligned cross-vendor ancestor walk: per-directory
+      // `<dir>/.agents/skills` alongside vendor-specific dirs, matching
+      // codex-rs/core-skills `repo_agents_skill_roots`. Skills-only.
+      const agentsSkillsDir = join(currentDir, '.agents', 'skills')
+      if (!dynamicSkillDirs.has(agentsSkillsDir)) {
+        dynamicSkillDirs.add(agentsSkillsDir)
+        try {
+          await fs.stat(agentsSkillsDir)
+          if (await isPathGitignored(currentDir, resolvedCwd)) {
+            logForDebugging(
+              `[skills] Skipped gitignored .agents/skills dir: ${agentsSkillsDir}`,
+            )
+          } else {
+            newDirs.push(agentsSkillsDir)
+          }
+        } catch {
+          // Directory doesn't exist — already recorded above.
         }
       }
 

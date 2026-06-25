@@ -33,6 +33,16 @@ export const getNcodeConfigHomeDir = memoize(
 
 export const getClaudeConfigHomeDir = getNcodeConfigHomeDir
 
+// Cross-vendor `.agents/` skills surface (codex-rs/core-skills compatible).
+// Hardcoded to $HOME — `.agents/` is cross-vendor and MUST NOT follow
+// NCODE_CONFIG_DIR/CLAUDE_CONFIG_DIR. Tests may override via HOME.
+export const getCrossVendorAgentsHomeDir = memoize(
+  (): string => {
+    return (process.env.HOME ?? homedir()).normalize('NFC')
+  },
+  () => process.env.HOME ?? homedir(),
+)
+
 export function getTeamsDir(): string {
   return join(getNcodeConfigHomeDir(), 'teams')
 }

@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, realpath, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -21,10 +21,17 @@ const FORBIDDEN_MANIFEST_KEYS = [
 const EXPECTED_IMAGE_PROCESSOR_FALLBACK_WARNING =
   'Native image processor not available, falling back to sharp';
 
+// These are smoke-test budgets, not product latency SLOs. They catch broken
+// startup paths while allowing GitHub-hosted macOS x64 cold starts enough room
+// to avoid millisecond-level flakes after safe whitespace-only packaging.
+const VERSION_CHECK_BUDGET_MS = 3_000;
+const HELP_CHECK_BUDGET_MS = 4_000;
+
 function parseArgs(argv) {
   const args = {
     outDir: undefined,
     target: undefined,
+    buildMode: 'noumena',
     runBinaryChecks: true,
     runNativeProbe: true,
     keepOutput: false,
@@ -36,6 +43,9 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === '--target') {
       args.target = argv[index + 1];
+      index += 1;
+    } else if (arg === '--build-mode') {
+      args.buildMode = argv[index + 1] ?? args.buildMode;
       index += 1;
     } else if (arg === '--no-run') {
       args.runBinaryChecks = false;
@@ -116,7 +126,7 @@ async function main() {
   try {
     const result = await buildCompiledPackage({
       outDir: tempRoot,
-      buildMode: 'noumena',
+      buildMode: args.buildMode,
       target: args.target,
     });
 
@@ -139,9 +149,9 @@ async function main() {
           `Compiled binary version output did not match expected contract: ${versionResult.stdout}`,
         );
       }
-      if (versionResult.elapsedMs > 2_000) {
+      if (versionResult.elapsedMs > VERSION_CHECK_BUDGET_MS) {
         throw new Error(
-          `Compiled binary --version exceeded fast-path budget: ${versionResult.elapsedMs}ms`,
+          `Compiled binary --version exceeded fast-path budget (${VERSION_CHECK_BUDGET_MS}ms): ${versionResult.elapsedMs}ms`,
         );
       }
 
@@ -159,9 +169,9 @@ async function main() {
         .map(line => line.trimEnd())
         .filter(line => line.trim().length > 0);
       expectLinesInOrder(helpLines, ['Usage: ncode', 'Options:'], 'compiled binary --help output');
-      if (helpResult.elapsedMs > 4_000) {
+      if (helpResult.elapsedMs > HELP_CHECK_BUDGET_MS) {
         throw new Error(
-          `Compiled binary --help exceeded fast-path budget: ${helpResult.elapsedMs}ms`,
+          `Compiled binary --help exceeded fast-path budget (${HELP_CHECK_BUDGET_MS}ms): ${helpResult.elapsedMs}ms`,
         );
       }
     }
@@ -183,6 +193,12 @@ async function main() {
     if (leakedManifestKeys.length > 0) {
       throw new Error(
         `Shipped manifest leaked local path keys: ${leakedManifestKeys.join(', ')}`,
+      );
+    }
+
+    if (manifest.compileOptions?.minify?.identifiers === true) {
+      throw new Error(
+        'Standalone package manifest enabled identifier minification, which is unsafe for the mounted CLI runtime (issue #36).',
       );
     }
 
@@ -220,9 +236,13 @@ async function main() {
           `Native runtime probe did not report Bun runtime: ${JSON.stringify(probeResult)}`,
         );
       }
-      if (probeResult.execPath !== probeBinaryPath) {
+      const [expectedExecPath, actualExecPath] = await Promise.all([
+        realpath(probeBinaryPath),
+        realpath(probeResult.execPath),
+      ]);
+      if (actualExecPath !== expectedExecPath) {
         throw new Error(
-          `Native runtime probe execPath mismatch. Expected ${probeBinaryPath}, got ${probeResult.execPath}`,
+          `Native runtime probe execPath mismatch. Expected ${expectedExecPath}, got ${actualExecPath}`,
         );
       }
       if (!Array.isArray(probeResult.imageProcessorWarnings)) {
